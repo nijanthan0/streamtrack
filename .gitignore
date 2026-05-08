@@ -19,3 +19,4 @@ __pycache__/
 
 # Streamlit Secrets (SECURITY RISK IF PUSHED)
 .streamlit/secrets.toml
+.streamlit/secrets copy.toml
