@@ -91,6 +91,8 @@ def get_worksheet_data(name):
             return pd.DataFrame(columns=["id", "asset_name", "asset_type", "invested_amount", "current_value"])
         elif name == "Goals":
             return pd.DataFrame(columns=["id", "goal_name", "goal_type", "target_amount", "current_amount", "target_date"])
+        elif name == "ShortTermGoals":
+            return pd.DataFrame(columns=["id", "goal_name", "target_date", "tasks", "completed_tasks"])
         return pd.DataFrame({"id": [1, 2, 3], "task_name": ["10k Steps Walk", "Study DSA", "3L Water"]})
 
 
@@ -221,10 +223,38 @@ def edit_financial_goal(g_id, goal_name, goal_type, target_amount, current_amoun
         df.at[idx[0], 'target_date'] = str(target_date)
         sync_to_cloud(df, "Goals")
 
+def add_short_term_goal(goal_name, target_date, tasks):
+    df = get_worksheet_data("ShortTermGoals")
+    new_id = int(df["id"].max() + 1) if not df.empty else 1
+    new_row = pd.DataFrame([{"id": new_id, "goal_name": str(goal_name), "target_date": str(target_date), "tasks": str(tasks), "completed_tasks": ""}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    sync_to_cloud(df, "ShortTermGoals")
+
+def delete_short_term_goal(g_id):
+    df = get_worksheet_data("ShortTermGoals")
+    df = df[df["id"].astype(str) != str(g_id)]
+    sync_to_cloud(df, "ShortTermGoals")
+
+def update_short_term_goal_tasks(g_id, completed_tasks):
+    df = get_worksheet_data("ShortTermGoals")
+    idx = df.index[df['id'].astype(str) == str(g_id)].tolist()
+    if idx:
+        df.at[idx[0], 'completed_tasks'] = str(completed_tasks)
+        sync_to_cloud(df, "ShortTermGoals")
+
+def edit_short_term_goal(g_id, goal_name, target_date, tasks):
+    df = get_worksheet_data("ShortTermGoals")
+    idx = df.index[df['id'].astype(str) == str(g_id)].tolist()
+    if idx:
+        df.at[idx[0], 'goal_name'] = str(goal_name)
+        df.at[idx[0], 'target_date'] = str(target_date)
+        df.at[idx[0], 'tasks'] = str(tasks)
+        sync_to_cloud(df, "ShortTermGoals")
+
 # --- UI LOGIC ---
 st.sidebar.title("🗓️ Control Center")
 selected_date = st.sidebar.date_input("Select Date", value=date.today())
-page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals"])
+page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals"])
 
 # Manage Checklist Logic
 st.sidebar.divider()
@@ -334,8 +364,19 @@ elif page == "Finance Tracker":
     if not finance_df.empty:
         finance_df['amount'] = pd.to_numeric(finance_df['amount'])
 
-        income = finance_df[finance_df['type'] == 'Income']['amount'].sum()
-        expense = finance_df[finance_df['type'] == 'Expense']['amount'].sum()
+        finance_df['date'] = pd.to_datetime(finance_df['date'], errors='coerce')
+        finance_df['month_year'] = finance_df['date'].dt.strftime('%Y-%m')
+
+        months = ["All Time"] + sorted([m for m in finance_df['month_year'].unique() if pd.notna(m)], reverse=True)
+        selected_month = st.selectbox("Filter by Month", months)
+
+        if selected_month != "All Time":
+            filtered_df = finance_df[finance_df['month_year'] == selected_month]
+        else:
+            filtered_df = finance_df
+
+        income = filtered_df[filtered_df['type'] == 'Income']['amount'].sum()
+        expense = filtered_df[filtered_df['type'] == 'Expense']['amount'].sum()
         balance = income - expense
 
         m_col1, m_col2, m_col3 = st.columns(3)
@@ -343,14 +384,15 @@ elif page == "Finance Tracker":
         m_col2.metric("Total Expense", f"₹{expense:,.2f}")
         m_col3.metric("Net Balance", f"₹{balance:,.2f}")
 
-        expense_df = finance_df[finance_df['type'] == 'Expense']
+        expense_df = filtered_df[filtered_df['type'] == 'Expense']
         if not expense_df.empty:
-            st.plotly_chart(px.pie(expense_df, values='amount', names='category', title='Expenses by Category'), use_container_width=True)
+            st.plotly_chart(px.pie(expense_df, values='amount', names='category', title=f'Expenses by Category ({selected_month})'), use_container_width=True)
 
         st.subheader("Transaction History")
-        st.dataframe(finance_df.sort_values("date", ascending=False), use_container_width=True)
+        display_cols = [col for col in filtered_df.columns if col != 'month_year']
+        st.dataframe(filtered_df[display_cols].sort_values("date", ascending=False), use_container_width=True)
 
-        del_id = st.selectbox("Delete Transaction (ID):", finance_df["id"].unique())
+        del_id = st.selectbox("Delete Transaction (ID):", filtered_df["id"].unique())
         if st.button("❌ Delete Transaction"):
             delete_finance_record(del_id)
             st.rerun()
@@ -513,3 +555,83 @@ elif page == "Portfolio & Goals":
             if st.button("Add Goal"):
                 add_financial_goal(g_name, g_type, g_target, g_curr, g_date)
                 st.rerun()
+
+# --- PAGE 5: SHORT-TERM GOALS ---
+elif page == "Short-Term Goals":
+    st.title("🎯 Short-Term Goals Tracker")
+    st.markdown("Track time-sensitive objectives like Interview Prep, Project Deadlines, or Certifications.")
+    
+    with st.expander("➕ Create New Short-Term Goal", expanded=False):
+        st_g_name = st.text_input("Goal Name (e.g., Google Interview Prep)")
+        st_g_date = st.date_input("Target Date")
+        st_g_tasks = st.text_area("Checklist Tasks (Comma-separated)", placeholder="e.g., Arrays and Strings, System Design Concepts, Mock Interview")
+        if st.button("Add Goal"):
+            if st_g_name and st_g_tasks:
+                add_short_term_goal(st_g_name, st_g_date, st_g_tasks)
+                st.success("Goal added successfully!")
+                st.rerun()
+            else:
+                st.warning("Please provide a name and at least one task.")
+
+    goals_df = get_worksheet_data("ShortTermGoals")
+    
+    if not goals_df.empty:
+        with st.expander("✏️ Edit Existing Goal"):
+            edit_stg_id = st.selectbox("Select Goal to Edit:", goals_df["id"].unique(), format_func=lambda x: goals_df[goals_df["id"]==x]["goal_name"].iloc[0], key="edit_stg_sel")
+            if edit_stg_id:
+                stg_to_edit = goals_df[goals_df["id"] == edit_stg_id].iloc[0]
+                e_stg_name = st.text_input("Goal Name", value=stg_to_edit["goal_name"], key="e_stg_name")
+                
+                e_stg_date_val = pd.to_datetime(stg_to_edit["target_date"], errors='coerce')
+                e_stg_date = st.date_input("Target Date", value=e_stg_date_val.date() if pd.notnull(e_stg_date_val) else date.today(), key="e_stg_date")
+                
+                e_stg_tasks = st.text_area("Checklist Tasks (Comma-separated)", value=str(stg_to_edit["tasks"]), key="e_stg_tasks", height=150)
+                
+                if st.button("Save Changes", key="e_stg_save"):
+                    edit_short_term_goal(edit_stg_id, e_stg_name, e_stg_date, e_stg_tasks)
+                    st.rerun()
+
+        st.divider()
+
+        for _, row in goals_df.iterrows():
+            with st.container(border=True):
+                col1, col2 = st.columns([3, 1])
+                col1.subheader(f"{row['goal_name']}")
+                
+                target_date = pd.to_datetime(row['target_date']).date()
+                days_left = (target_date - date.today()).days
+                
+                if days_left < 0:
+                    date_status = f"<span style='color:red;'>Overdue by {abs(days_left)} days</span>"
+                elif days_left == 0:
+                    date_status = "<span style='color:orange;'>Due Today!</span>"
+                else:
+                    date_status = f"<span style='color:lightgreen;'>{days_left} days left</span>"
+                    
+                col2.markdown(f"**Target:** {target_date}<br>{date_status}", unsafe_allow_html=True)
+                
+                all_tasks = [t.strip() for t in str(row['tasks']).split(",") if t.strip()]
+                completed_tasks = [t.strip() for t in str(row.get('completed_tasks', '')).split(",") if t.strip()]
+                
+                if all_tasks:
+                    valid_completed = [t for t in completed_tasks if t in all_tasks]
+                    progress = min(len(valid_completed) / len(all_tasks), 1.0)
+                    st.progress(progress, text=f"Progress: {len(valid_completed)}/{len(all_tasks)} Tasks Completed")
+                    
+                    st.markdown("**Tasks:**")
+                    new_completed = []
+                    for t in all_tasks:
+                        if st.checkbox(t, value=(t in completed_tasks), key=f"stg_{row['id']}_{t}"):
+                            new_completed.append(t)
+                            
+                    if set(new_completed) != set(completed_tasks):
+                        update_short_term_goal_tasks(row['id'], ",".join(new_completed))
+                        st.rerun()
+                else:
+                    st.info("No tasks added for this goal.")
+                    
+                if st.button("❌ Delete Goal", key=f"del_stg_{row['id']}"):
+                    delete_short_term_goal(row['id'])
+                    st.rerun()
+    else:
+        st.info("No short-term goals found. Add one above to get started!")

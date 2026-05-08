@@ -1,6 +1,7 @@
 # Virtual Environments
 venv/
 .venv/
+.new_venv/
 env/
 ENV/
 
