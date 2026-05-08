@@ -1,0 +1,457 @@
+import streamlit as st
+import pandas as pd
+import sqlite3
+from datetime import date
+import plotly.express as px
+
+# --- CONFIGURATION ---
+CHALLENGE_START_DATE = date(2026, 5, 7)
+TOTAL_DAYS = 365
+
+
+# --- DATABASE ENGINE ---
+def init_db():
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS logs 
+                 (day_num INTEGER PRIMARY KEY, log_date TEXT, tasks_completed INTEGER, weight REAL, notes TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS task_list (id INTEGER PRIMARY KEY, task_name TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS finance_logs 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, f_date TEXT, type TEXT, category TEXT, amount REAL, notes TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS portfolio 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_name TEXT, asset_type TEXT, invested_amount REAL, current_value REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS goals 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, goal_name TEXT, goal_type TEXT, target_amount REAL, current_amount REAL, target_date TEXT)''')
+
+    # Migrations & Seeding
+    try:
+        c.execute("SELECT weight FROM logs LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE logs ADD COLUMN weight REAL DEFAULT 92.0")
+    try:
+        c.execute("SELECT log_date FROM logs LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE logs ADD COLUMN log_date TEXT")
+        
+    try:
+        c.execute("SELECT goal_type FROM goals LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE goals ADD COLUMN goal_type TEXT DEFAULT 'Cash'")
+
+    c.execute("SELECT COUNT(*) FROM task_list")
+    if c.fetchone()[0] == 0:
+        seed_tasks = ["10k Steps Walk", "Study DSA (1 Hour)", "3L Water", "Intermittent Fasting"]
+        for t in seed_tasks:
+            c.execute("INSERT INTO task_list (task_name) VALUES (?)", (t,))
+    conn.commit()
+    conn.close()
+
+
+# --- HELPER FUNCTIONS ---
+def get_dynamic_tasks():
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query("SELECT * FROM task_list", conn)
+    conn.close()
+    return df
+
+
+def add_task(name):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO task_list (task_name) VALUES (?)", (name,))
+    conn.commit()
+    conn.close()
+
+
+def delete_task(t_id):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM task_list WHERE id = ?", (t_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_finance_data():
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query("SELECT * FROM finance_logs", conn)
+    conn.close()
+    return df
+
+def add_finance_record(f_date, f_type, category, amount, notes):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO finance_logs (f_date, type, category, amount, notes) VALUES (?, ?, ?, ?, ?)",
+              (f_date, f_type, category, amount, notes))
+    conn.commit()
+    conn.close()
+
+def delete_finance_record(f_id):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM finance_logs WHERE id = ?", (f_id,))
+    conn.commit()
+    conn.close()
+
+def get_portfolio_data():
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query("SELECT * FROM portfolio", conn)
+    conn.close()
+    return df
+
+def add_portfolio_asset(asset_name, asset_type, invested_amount, current_value):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO portfolio (asset_name, asset_type, invested_amount, current_value) VALUES (?, ?, ?, ?)", (asset_name, asset_type, invested_amount, current_value))
+    conn.commit()
+    conn.close()
+
+def delete_portfolio_asset(p_id):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM portfolio WHERE id = ?", (p_id,))
+    conn.commit()
+    conn.close()
+
+def get_goals_data():
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query("SELECT * FROM goals", conn)
+    conn.close()
+    return df
+
+def add_financial_goal(goal_name, goal_type, target_amount, current_amount, target_date):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO goals (goal_name, goal_type, target_amount, current_amount, target_date) VALUES (?, ?, ?, ?, ?)", (goal_name, goal_type, target_amount, current_amount, target_date))
+    conn.commit()
+    conn.close()
+
+def delete_financial_goal(g_id):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM goals WHERE id = ?", (g_id,))
+    conn.commit()
+    conn.close()
+
+def edit_portfolio_asset(p_id, asset_name, asset_type, invested_amount, current_value):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("UPDATE portfolio SET asset_name = ?, asset_type = ?, invested_amount = ?, current_value = ? WHERE id = ?", (asset_name, asset_type, invested_amount, current_value, p_id))
+    conn.commit()
+    conn.close()
+
+def edit_financial_goal(g_id, goal_name, goal_type, target_amount, current_amount, target_date):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("UPDATE goals SET goal_name = ?, goal_type = ?, target_amount = ?, current_amount = ?, target_date = ? WHERE id = ?", (goal_name, goal_type, target_amount, current_amount, str(target_date), g_id))
+    conn.commit()
+    conn.close()
+
+def save_log(day, log_date, score, weight, note):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO logs (day_num, log_date, tasks_completed, weight, notes) VALUES (?, ?, ?, ?, ?)",
+              (day, log_date, score, weight, note))
+    conn.commit()
+    conn.close()
+
+
+def delete_log_entry(day_n):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM logs WHERE day_num = ?", (day_n,))
+    conn.commit()
+    conn.close()
+
+
+def get_existing_log(day_n):
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query(f"SELECT * FROM logs WHERE day_num = {day_n}", conn)
+    conn.close()
+    return df
+
+
+init_db()
+
+# --- SIDEBAR: NAVIGATION & TASK MANAGER ---
+st.sidebar.title("🗓️ Control Center")
+selected_date = st.sidebar.date_input("Select Date", value=date.today())
+page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals"])
+
+st.sidebar.divider()
+st.sidebar.subheader("⚙️ Manage Checklist")
+new_task = st.sidebar.text_input("New task name...")
+if st.sidebar.button("Add to Checklist"):
+    if new_task:
+        add_task(new_task)
+        st.rerun()
+
+all_tasks = get_dynamic_tasks()
+for _, row in all_tasks.iterrows():
+    col_t, col_b = st.sidebar.columns([4, 1])
+    col_t.write(f"• {row['task_name']}")
+    if col_b.button("🗑️", key=f"del_task_{row['id']}"):
+        delete_task(row['id'])
+        st.rerun()
+
+active_day_num = (selected_date - CHALLENGE_START_DATE).days + 1
+
+# --- PAGE 1: DAILY LOG ---
+if page == "Daily Log":
+    st.title(f"🚀 Day {active_day_num} of {TOTAL_DAYS}")
+    st.write(f"**Logging for:** {selected_date.strftime('%A, %B %d, %Y')}")
+
+    existing_df = get_existing_log(active_day_num)
+    has_data = not existing_df.empty
+
+    val_w = float(existing_df['weight'].iloc[0]) if has_data else 92.0
+    val_note = existing_df['notes'].iloc[0] if has_data else ""
+    val_score = int(existing_df['tasks_completed'].iloc[0]) if has_data else 0
+
+    col1, col2 = st.columns(2)
+    with col1:
+        current_w = st.number_input("Current Weight (kg)", value=val_w, step=0.1)
+    with col2:
+        st.metric("Goal: 82.0 kg", f"{current_w} kg", delta=f"{82.0 - current_w:.1f} kg")
+
+    st.subheader("Daily Checklist")
+    current_task_names = all_tasks['task_name'].tolist()
+
+    if has_data:
+        st.info(f"Previously logged score: {val_score}/{len(current_task_names)}")
+
+    checked_tasks = [st.checkbox(t, key=f"c_{t}_{active_day_num}") for t in current_task_names]
+    score = sum(checked_tasks)
+
+    st.subheader("Journal")
+    user_note = st.text_area("Observations:", value=val_note)
+
+    if st.button("Save Entry"):
+        save_log(active_day_num, selected_date.isoformat(), score, current_w, user_note)
+        st.balloons()
+        st.success(f"Day {active_day_num} recorded!")
+
+# --- PAGE 2: ANALYTICS & HISTORY ---
+elif page == "Analytics & History":
+    st.title("📊 Progress Analytics")
+    conn = sqlite3.connect('challenge.db')
+    hist_df = pd.read_sql_query("SELECT * FROM logs ORDER BY day_num ASC", conn)
+    conn.close()
+
+    if not hist_df.empty:
+        # Charts
+        st.plotly_chart(px.line(hist_df, x="day_num", y="tasks_completed", title="Activity Trend", markers=True),
+                        use_container_width=True)
+        fig_w = px.line(hist_df, x="day_num", y="weight", title="Weight Journey", markers=True)
+        fig_w.add_hline(y=82.0, line_dash="dash", line_color="green", annotation_text="Target 82kg")
+        st.plotly_chart(fig_w, use_container_width=True)
+
+        st.divider()
+        st.subheader("Manage Historical Data")
+
+        # Log Deletion Section
+        log_to_delete = st.selectbox("Select Day to Delete:", hist_df['day_num'].unique())
+        if st.button("❌ Delete Selected Day Log"):
+            delete_log_entry(log_to_delete)
+            st.warning(f"Day {log_to_delete} log has been deleted.")
+            st.rerun()
+
+        st.subheader("Raw Data Table")
+        st.dataframe(hist_df.sort_values(by="day_num", ascending=False), use_container_width=True)
+    else:
+        st.warning("No data logged yet.")
+
+# --- PAGE 3: FINANCE TRACKER ---
+elif page == "Finance Tracker":
+    st.title("💸 Finance Tracker")
+
+    with st.expander("➕ Add New Transaction", expanded=True):
+        f_col1, f_col2 = st.columns(2)
+        with f_col1:
+            f_date = st.date_input("Date", value=date.today(), key="f_date")
+            f_type = st.selectbox("Type", ["Expense", "Income"])
+            f_amount = st.number_input("Amount", min_value=0.0, step=10.0)
+        with f_col2:
+            categories = ["Food", "Transport", "Rent/Mortgage", "Salary", "Utilities", "Entertainment", "Other"]
+            f_category = st.selectbox("Category", categories)
+            f_notes = st.text_input("Notes (Optional)")
+
+        if st.button("Add Transaction"):
+            add_finance_record(f_date, f_type, f_category, f_amount, f_notes)
+            st.success("Transaction added!")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Dashboard")
+
+    finance_df = get_finance_data()
+
+    if not finance_df.empty:
+        income = finance_df[finance_df['type'] == 'Income']['amount'].sum()
+        expense = finance_df[finance_df['type'] == 'Expense']['amount'].sum()
+        balance = income - expense
+
+        m_col1, m_col2, m_col3 = st.columns(3)
+        m_col1.metric("Total Income", f"₹{income:,.2f}")
+        m_col2.metric("Total Expense", f"₹{expense:,.2f}")
+        m_col3.metric("Net Balance", f"₹{balance:,.2f}")
+
+        expense_df = finance_df[finance_df['type'] == 'Expense']
+        if not expense_df.empty:
+            st.plotly_chart(px.pie(expense_df, values='amount', names='category', title='Expenses by Category'), use_container_width=True)
+
+        st.subheader("Transaction History")
+        st.dataframe(finance_df.sort_values("f_date", ascending=False), use_container_width=True)
+
+        del_id = st.selectbox("Delete Transaction (ID):", finance_df["id"].unique())
+        if st.button("❌ Delete Transaction"):
+            delete_finance_record(del_id)
+            st.rerun()
+    else:
+        st.info("No transactions logged yet.")
+
+# --- PAGE 4: PORTFOLIO & GOALS ---
+elif page == "Portfolio & Goals":
+    st.title("📈 Portfolio & Financial Goals")
+    
+    tab1, tab2 = st.tabs(["💼 Portfolio Dashboard", "🎯 Financial Goals"])
+    
+    with tab1:
+        st.subheader("Asset Allocation")
+        portfolio_df = get_portfolio_data()
+        if not portfolio_df.empty:
+            total_invested = portfolio_df['invested_amount'].sum()
+            total_current = portfolio_df['current_value'].sum()
+            total_pl = total_current - total_invested
+            pl_pct = (total_pl / total_invested * 100) if total_invested > 0 else 0
+            
+            p_col1, p_col2, p_col3 = st.columns(3)
+            p_col1.metric("Total Invested", f"₹{total_invested:,.2f}")
+            p_col2.metric("Current Value", f"₹{total_current:,.2f}", delta=f"₹{total_pl:,.2f} ({pl_pct:.2f}%)")
+            p_col3.metric("Total Assets", len(portfolio_df))
+            
+            st.plotly_chart(px.pie(portfolio_df, values='current_value', names='asset_type', title='Portfolio by Asset Type'), use_container_width=True)
+            
+            st.dataframe(portfolio_df, use_container_width=True)
+            
+            del_p_id = st.selectbox("Delete Asset (ID):", portfolio_df["id"].unique(), key="del_p")
+            if st.button("❌ Delete Asset"):
+                delete_portfolio_asset(del_p_id)
+                st.rerun()
+                
+            with st.expander("✏️ Edit Asset"):
+                edit_p_id = st.selectbox("Select Asset to Edit:", portfolio_df["id"].unique(), format_func=lambda x: portfolio_df[portfolio_df["id"]==x]["asset_name"].iloc[0])
+                if edit_p_id:
+                    asset_to_edit = portfolio_df[portfolio_df["id"] == edit_p_id].iloc[0]
+                    e_name = st.text_input("Asset Name", value=asset_to_edit["asset_name"], key="e_a_name")
+                    
+                    base_types = ["Stocks", "Crypto", "Bonds", "Real Estate", "Cash", "Other"]
+                    existing_types = portfolio_df["asset_type"].unique().tolist() if not portfolio_df.empty else []
+                    type_options = sorted(list(set(base_types + existing_types)))
+                    default_idx = type_options.index(asset_to_edit["asset_type"]) if asset_to_edit["asset_type"] in type_options else 0
+                    e_type_sel = st.selectbox("Asset Type", type_options + ["+ Add Custom Type"], index=default_idx, key="e_a_type_sel")
+                    if e_type_sel == "+ Add Custom Type":
+                        e_type = st.text_input("Enter Custom Asset Type", key="e_a_type_custom")
+                    else:
+                        e_type = e_type_sel
+                        
+                    e_inv = st.number_input("Invested Amount (₹)", min_value=0.0, value=float(asset_to_edit["invested_amount"]), key="e_a_inv")
+                    e_cur = st.number_input("Current Value (₹)", min_value=0.0, value=float(asset_to_edit["current_value"]), key="e_a_cur")
+                    if st.button("Save Changes", key="e_a_save"):
+                        edit_portfolio_asset(edit_p_id, e_name, e_type, e_inv, e_cur)
+                        st.rerun()
+        else:
+            st.info("No assets in portfolio yet.")
+            
+        with st.expander("➕ Add New Asset"):
+            a_name = st.text_input("Asset Name (e.g. Apple Stock, Vanguard ETF)")
+            
+            base_types = ["Stocks", "Crypto", "Bonds", "Real Estate", "Cash", "Other"]
+            existing_types = portfolio_df["asset_type"].unique().tolist() if not portfolio_df.empty else []
+            type_options = sorted(list(set(base_types + existing_types)))
+            a_type_sel = st.selectbox("Asset Type", type_options + ["+ Add Custom Type"])
+            if a_type_sel == "+ Add Custom Type":
+                a_type = st.text_input("Enter Custom Asset Type")
+            else:
+                a_type = a_type_sel
+                
+            a_inv = st.number_input("Invested Amount (₹)", min_value=0.0)
+            a_cur = st.number_input("Current Value (₹)", min_value=0.0)
+            if st.button("Add Asset"):
+                add_portfolio_asset(a_name, a_type, a_inv, a_cur)
+                st.rerun()
+                
+    with tab2:
+        st.subheader("Savings & Milestones")
+        goals_df = get_goals_data()
+        
+        if not goals_df.empty:
+            for _, row in goals_df.iterrows():
+                target_amt = max(0.01, float(row['target_amount']))
+                progress = min(float(row['current_amount']) / target_amt, 1.0)
+                
+                g_type = row.get("goal_type", "Cash")
+                if pd.isna(g_type) or g_type not in ["Cash", "Gram", "Size"]:
+                    g_type = "Cash"
+                    
+                if g_type == "Cash":
+                    prog_text = f"₹{row['current_amount']:,.2f} / ₹{row['target_amount']:,.2f} ({progress*100:.1f}%)"
+                elif g_type == "Gram":
+                    prog_text = f"{row['current_amount']:,.2f}g / {row['target_amount']:,.2f}g ({progress*100:.1f}%)"
+                else:
+                    prog_text = f"{row['current_amount']:,.2f} units / {row['target_amount']:,.2f} units ({progress*100:.1f}%)"
+                    
+                st.write(f"**{row['goal_name']}** ({g_type} | Target: {row['target_date']})")
+                st.progress(progress, text=prog_text)
+            
+            st.divider()
+            del_g_id = st.selectbox("Delete Goal (ID):", goals_df["id"].unique(), key="del_g")
+            if st.button("❌ Delete Goal"):
+                delete_financial_goal(del_g_id)
+                st.rerun()
+                
+            with st.expander("✏️ Edit Goal"):
+                edit_g_id = st.selectbox("Select Goal to Edit:", goals_df["id"].unique(), format_func=lambda x: goals_df[goals_df["id"]==x]["goal_name"].iloc[0])
+                if edit_g_id:
+                    goal_to_edit = goals_df[goals_df["id"] == edit_g_id].iloc[0]
+                    eg_name = st.text_input("Goal Name", value=goal_to_edit["goal_name"], key="e_g_name")
+                    
+                    current_g_type = goal_to_edit.get("goal_type", "Cash")
+                    if pd.isna(current_g_type) or current_g_type not in ["Cash", "Gram", "Size"]:
+                        current_g_type = "Cash"
+                        
+                    eg_type = st.selectbox("Goal Type", ["Cash", "Gram", "Size"], index=["Cash", "Gram", "Size"].index(current_g_type), key="e_g_type")
+                    
+                    if eg_type == "Cash":
+                        elbl_t, elbl_c = "Target Amount (₹)", "Currently Saved (₹)"
+                    elif eg_type == "Gram":
+                        elbl_t, elbl_c = "Target Weight (grams)", "Currently Saved (grams)"
+                    else:
+                        elbl_t, elbl_c = "Target Size (cents/acres)", "Currently Owned (cents/acres)"
+                        
+                    eg_target = st.number_input(elbl_t, min_value=0.01, value=float(max(0.01, goal_to_edit["target_amount"])), key="e_g_target")
+                    eg_curr = st.number_input(elbl_c, min_value=0.0, value=float(goal_to_edit["current_amount"]), key="e_g_curr")
+                    eg_date_val = pd.to_datetime(goal_to_edit["target_date"], errors='coerce')
+                    eg_date = st.date_input("Target Date", value=eg_date_val.date() if pd.notnull(eg_date_val) else date.today(), key="e_g_date")
+                    if st.button("Save Changes", key="e_g_save"):
+                        edit_financial_goal(edit_g_id, eg_name, eg_type, eg_target, eg_curr, eg_date)
+                        st.rerun()
+        else:
+            st.info("No financial goals set yet.")
+            
+        with st.expander("➕ Create New Goal"):
+            g_name = st.text_input("Goal Name (e.g. House Downpayment, Gold Savings)")
+            g_type = st.selectbox("Goal Type", ["Cash", "Gram", "Size"])
+            
+            if g_type == "Cash":
+                lbl_t, lbl_c = "Target Amount (₹)", "Currently Saved (₹)"
+            elif g_type == "Gram":
+                lbl_t, lbl_c = "Target Weight (grams)", "Currently Saved (grams)"
+            else:
+                lbl_t, lbl_c = "Target Size (cents/acres)", "Currently Owned (cents/acres)"
+                
+            g_target = st.number_input(lbl_t, min_value=0.01, value=1.0)
+            g_curr = st.number_input(lbl_c, min_value=0.0)
+            g_date = st.date_input("Target Date")
+            if st.button("Add Goal"):
+                add_financial_goal(g_name, g_type, g_target, g_curr, g_date)
+                st.rerun()

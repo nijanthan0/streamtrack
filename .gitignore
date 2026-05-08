@@ -1,0 +1,20 @@
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# PyCharm / IDEs
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database
+*.db
+
+# Streamlit Secrets (SECURITY RISK IF PUSHED)
+.streamlit/secrets.toml
