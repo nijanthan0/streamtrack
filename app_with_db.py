@@ -5,7 +5,6 @@ from datetime import date
 import plotly.express as px
 
 # --- CONFIGURATION ---
-CHALLENGE_START_DATE = date(2026, 5, 7)
 TOTAL_DAYS = 365
 
 
@@ -177,10 +176,49 @@ def get_existing_log(day_n):
     return df
 
 
+def get_short_term_goals():
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query("SELECT * FROM short_term_goals", conn)
+    conn.close()
+    return df
+
+
+def add_short_term_goal(goal_name, target_date, tasks):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO short_term_goals (goal_name, target_date, tasks, completed_tasks) VALUES (?, ?, ?, ?)", (goal_name, target_date, tasks, ""))
+    conn.commit()
+    conn.close()
+
+
+def delete_short_term_goal(g_id):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM short_term_goals WHERE id = ?", (g_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_short_term_goal_tasks(g_id, completed_tasks):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("UPDATE short_term_goals SET completed_tasks = ? WHERE id = ?", (completed_tasks, g_id))
+    conn.commit()
+    conn.close()
+
+
+def edit_short_term_goal(g_id, goal_name, target_date, tasks):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("UPDATE short_term_goals SET goal_name = ?, target_date = ?, tasks = ? WHERE id = ?", (goal_name, target_date, tasks, g_id))
+    conn.commit()
+    conn.close()
+
 init_db()
 
 # --- SIDEBAR: NAVIGATION & TASK MANAGER ---
 st.sidebar.title("🗓️ Control Center")
+challenge_start_date = st.sidebar.date_input("Challenge Start Date", value=date(2026, 5, 7))
 selected_date = st.sidebar.date_input("Select Date", value=date.today())
 page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals"])
 
@@ -200,7 +238,7 @@ for _, row in all_tasks.iterrows():
         delete_task(row['id'])
         st.rerun()
 
-active_day_num = (selected_date - CHALLENGE_START_DATE).days + 1
+active_day_num = (selected_date - challenge_start_date).days + 1
 
 # --- PAGE 1: DAILY LOG ---
 if page == "Daily Log":

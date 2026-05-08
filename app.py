@@ -7,7 +7,6 @@ from datetime import date
 import plotly.express as px
 
 # --- CONFIGURATION ---
-CHALLENGE_START_DATE = date(2026, 5, 7)
 TOTAL_DAYS = 365
 
 
@@ -253,6 +252,7 @@ def edit_short_term_goal(g_id, goal_name, target_date, tasks):
 
 # --- UI LOGIC ---
 st.sidebar.title("🗓️ Control Center")
+challenge_start_date = st.sidebar.date_input("Challenge Start Date", value=date(2026, 5, 7))
 selected_date = st.sidebar.date_input("Select Date", value=date.today())
 page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals"])
 
@@ -273,7 +273,7 @@ for _, row in tasks_df.iterrows():
         delete_task(row['id'])
         st.rerun()
 
-active_day_num = (selected_date - CHALLENGE_START_DATE).days + 1
+active_day_num = (selected_date - challenge_start_date).days + 1
 
 # --- PAGE 1: DAILY LOG ---
 if page == "Daily Log":
