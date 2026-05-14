@@ -5,9 +5,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import date
 import plotly.express as px
+import requests
+import threading
+import time
+import schedule
 
 # --- CONFIGURATION ---
-TOTAL_DAYS = 365
 
 
 # def set_bg_image(image_path):
@@ -92,6 +95,8 @@ def get_worksheet_data(name):
             return pd.DataFrame(columns=["id", "goal_name", "goal_type", "target_amount", "current_amount", "target_date"])
         elif name == "ShortTermGoals":
             return pd.DataFrame(columns=["id", "goal_name", "target_date", "tasks", "completed_tasks"])
+        elif name == "Schedules":
+            return pd.DataFrame(columns=["id", "reminder_time", "message", "title"])
         return pd.DataFrame({"id": [1, 2, 3], "task_name": ["10k Steps Walk", "Study DSA", "3L Water"]})
 
 
@@ -250,11 +255,68 @@ def edit_short_term_goal(g_id, goal_name, target_date, tasks):
         df.at[idx[0], 'tasks'] = str(tasks)
         sync_to_cloud(df, "ShortTermGoals")
 
+def add_schedule(reminder_time, message, title):
+    df = get_worksheet_data("Schedules")
+    new_id = int(df["id"].max() + 1) if not df.empty else 1
+    new_row = pd.DataFrame([{"id": new_id, "reminder_time": str(reminder_time), "message": str(message), "title": str(title)}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    sync_to_cloud(df, "Schedules")
+
+def delete_schedule(s_id):
+    df = get_worksheet_data("Schedules")
+    df = df[df["id"].astype(str) != str(s_id)]
+    sync_to_cloud(df, "Schedules")
+
+# --- BACKGROUND REMINDER SERVICE ---
+class ReminderService:
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ReminderService, cls).__new__(cls)
+            cls._instance.thread = None
+            cls._instance.stop_event = threading.Event()
+            cls._instance.topic = "my_streamtrack_reminders"
+        return cls._instance
+
+    def start(self, topic):
+        self.topic = topic
+        if self.thread is None or not self.thread.is_alive():
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+            
+            schedule.clear()
+            df = get_worksheet_data("Schedules")
+            for _, row in df.iterrows():
+                try:
+                    schedule.every().day.at(str(row['reminder_time'])).do(self.send_reminder, str(row['message']), str(row['title']))
+                except Exception:
+                    pass
+
+    def _run(self):
+        while not self.stop_event.is_set():
+            schedule.run_pending()
+            time.sleep(1)
+
+    def send_reminder(self, message, title):
+        try:
+            requests.post(f"https://ntfy.sh/{self.topic}", data=message.encode('utf-8'), headers={"Title": title.encode('utf-8')})
+        except Exception:
+            pass
+
+@st.cache_resource
+def get_reminder_service():
+    return ReminderService()
+
+reminders = get_reminder_service()
+
 # --- UI LOGIC ---
 st.sidebar.title("🗓️ Control Center")
 challenge_start_date = st.sidebar.date_input("Challenge Start Date", value=date(2026, 5, 7))
+challenge_end_date = st.sidebar.date_input("Challenge End Date", value=date(2027, 5, 7))
+target_weight = st.sidebar.number_input("Target Weight Goal (kg)", value=82.0, step=0.1)
 selected_date = st.sidebar.date_input("Select Date", value=date.today())
-page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals"])
+page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals", "Reminders Schedule"])
 
 # Manage Checklist Logic
 st.sidebar.divider()
@@ -273,7 +335,23 @@ for _, row in tasks_df.iterrows():
         delete_task(row['id'])
         st.rerun()
 
+st.sidebar.divider()
+st.sidebar.subheader("🔔 Reminders (ntfy.sh)")
+ntfy_topic = st.sidebar.text_input("ntfy Topic Name", value="my_streamtrack_reminders", help="Install the ntfy app on your phone and subscribe to this topic name.")
+
+if st.sidebar.button("▶️ Start Auto-Reminders", use_container_width=True):
+    reminders.start(ntfy_topic)
+    st.sidebar.success("Started! 🕒")
+
+if st.sidebar.button("✉️ Send Test Notification", use_container_width=True):
+    reminders.topic = ntfy_topic
+    reminders.send_reminder("This is a test reminder from Streamtrack! 🚀", "Test Reminder")
+    st.sidebar.success("Test sent!")
+
+st.sidebar.caption("Note: The app must remain running in your terminal for automated reminders to trigger at scheduled times.")
+
 active_day_num = (selected_date - challenge_start_date).days + 1
+TOTAL_DAYS = (challenge_end_date - challenge_start_date).days
 
 # --- PAGE 1: DAILY LOG ---
 if page == "Daily Log":
@@ -295,7 +373,7 @@ if page == "Daily Log":
     with col1:
         current_w = st.number_input("Current Weight (kg)", value=val_w, step=0.1)
     with col2:
-        st.metric("Goal: 82.0 kg", f"{current_w} kg", delta=f"{82.0 - current_w:.1f} kg")
+        st.metric(f"Goal: {target_weight} kg", f"{current_w} kg", delta=f"{target_weight - current_w:.1f} kg")
 
     st.subheader("Daily Checklist")
     task_list = tasks_df["task_name"].tolist()
@@ -322,7 +400,7 @@ elif page == "Analytics & History":
         st.plotly_chart(px.line(hist_df, x="day_num", y="tasks_completed", title="Activity Trend", markers=True))
 
         fig_w = px.line(hist_df, x="day_num", y="weight", title="Weight Journey", markers=True)
-        fig_w.add_hline(y=82.0, line_dash="dash", line_color="green")
+        fig_w.add_hline(y=target_weight, line_dash="dash", line_color="green", annotation_text=f"Target {target_weight}kg")
         st.plotly_chart(fig_w)
 
         st.divider()
@@ -635,3 +713,36 @@ elif page == "Short-Term Goals":
                     st.rerun()
     else:
         st.info("No short-term goals found. Add one above to get started!")
+
+# --- PAGE 6: REMINDERS SCHEDULE ---
+elif page == "Reminders Schedule":
+    st.title("⏰ Reminders Schedule")
+    st.markdown("Manage your daily ntfy.sh notification schedules here.")
+    
+    with st.expander("➕ Add New Reminder", expanded=True):
+        r_time = st.time_input("Reminder Time")
+        r_title = st.text_input("Title", placeholder="e.g. Study Time 📚")
+        r_msg = st.text_area("Message", placeholder="e.g. Time to learn DSA and do job prep! 💻")
+        
+        if st.button("Add Reminder"):
+            if r_title and r_msg:
+                add_schedule(r_time.strftime("%H:%M"), r_msg, r_title)
+                st.success("Reminder added!")
+                st.rerun()
+            else:
+                st.warning("Please provide a title and message.")
+
+    sched_df = get_worksheet_data("Schedules")
+    if not sched_df.empty:
+        st.subheader("Current Schedules")
+        st.info("💡 Note: After adding or deleting schedules, click **▶️ Start Auto-Reminders** in the sidebar to apply changes!")
+        
+        for _, row in sched_df.iterrows():
+            with st.container(border=True):
+                col1, col2 = st.columns([4, 1])
+                col1.markdown(f"**{row['reminder_time']}** - {row['title']}<br>_{row['message']}_", unsafe_allow_html=True)
+                if col2.button("❌ Delete", key=f"del_sched_{row['id']}"):
+                    delete_schedule(row['id'])
+                    st.rerun()
+    else:
+        st.info("No reminders scheduled.")

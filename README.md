@@ -29,7 +29,7 @@ Streamtrack provides two separate implementations based on your preference:
 1. **Install Dependencies:**
    Make sure you have Python installed. Then, install the required packages:
    ```bash
-   pip install streamlit pandas gspread google-auth plotly
+   pip install streamlit pandas gspread google-auth plotly schedule requests
    ```
 
 2. **Configure Google Sheets Credentials (for `app.py` only):**

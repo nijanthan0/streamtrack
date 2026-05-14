@@ -3,9 +3,12 @@ import pandas as pd
 import sqlite3
 from datetime import date
 import plotly.express as px
+import requests
+import threading
+import time
+import schedule
 
 # --- CONFIGURATION ---
-TOTAL_DAYS = 365
 
 
 # --- DATABASE ENGINE ---
@@ -23,6 +26,8 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, goal_name TEXT, goal_type TEXT, target_amount REAL, current_amount REAL, target_date TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS short_term_goals 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, goal_name TEXT, target_date TEXT, tasks TEXT, completed_tasks TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS schedules 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, reminder_time TEXT, message TEXT, title TEXT)''')
 
     # Migrations & Seeding
     try:
@@ -49,6 +54,16 @@ def init_db():
         seed_tasks = ["10k Steps Walk", "Study DSA (1 Hour)", "3L Water", "Intermittent Fasting"]
         for t in seed_tasks:
             c.execute("INSERT INTO task_list (task_name) VALUES (?)", (t,))
+            
+    c.execute("SELECT COUNT(*) FROM schedules")
+    if c.fetchone()[0] == 0:
+        seed_schedules = [
+            ("07:00", "Time to wash your face and brush your teeth! 🪥", "Morning Routine ☀️"),
+            ("10:00", "Time to learn DSA and do job prep! 💻", "Study Time 📚"),
+            ("18:00", "Time to prepare public speaking skills! 🎤", "Skill Prep 🗣️")
+        ]
+        for s in seed_schedules:
+            c.execute("INSERT INTO schedules (reminder_time, message, title) VALUES (?, ?, ?)", s)
     conn.commit()
     conn.close()
 
@@ -214,13 +229,81 @@ def edit_short_term_goal(g_id, goal_name, target_date, tasks):
     conn.commit()
     conn.close()
 
+def get_schedules():
+    conn = sqlite3.connect('challenge.db')
+    df = pd.read_sql_query("SELECT * FROM schedules", conn)
+    conn.close()
+    return df
+
+def add_schedule(reminder_time, message, title):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO schedules (reminder_time, message, title) VALUES (?, ?, ?)", (reminder_time, message, title))
+    conn.commit()
+    conn.close()
+
+def delete_schedule(s_id):
+    conn = sqlite3.connect('challenge.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM schedules WHERE id = ?", (s_id,))
+    conn.commit()
+    conn.close()
+
+# --- BACKGROUND REMINDER SERVICE ---
+class ReminderService:
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ReminderService, cls).__new__(cls)
+            cls._instance.thread = None
+            cls._instance.stop_event = threading.Event()
+            cls._instance.topic = "my_streamtrack_reminders"
+        return cls._instance
+
+    def start(self, topic):
+        self.topic = topic
+        # Only start a new thread if one isn't already running
+        if self.thread is None or not self.thread.is_alive():
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+            
+            schedule.clear()
+            conn = sqlite3.connect('challenge.db')
+            df = pd.read_sql_query("SELECT * FROM schedules", conn)
+            conn.close()
+            for _, row in df.iterrows():
+                try:
+                    schedule.every().day.at(row['reminder_time']).do(self.send_reminder, row['message'], row['title'])
+                except Exception:
+                    pass
+
+    def _run(self):
+        while not self.stop_event.is_set():
+            schedule.run_pending()
+            time.sleep(1)
+
+    def send_reminder(self, message, title):
+        try:
+            requests.post(f"https://ntfy.sh/{self.topic}", data=message.encode('utf-8'), headers={"Title": title.encode('utf-8')})
+        except Exception:
+            pass
+
+@st.cache_resource
+def get_reminder_service():
+    return ReminderService()
+
+reminders = get_reminder_service()
+
 init_db()
 
 # --- SIDEBAR: NAVIGATION & TASK MANAGER ---
 st.sidebar.title("🗓️ Control Center")
 challenge_start_date = st.sidebar.date_input("Challenge Start Date", value=date(2026, 5, 7))
+challenge_end_date = st.sidebar.date_input("Challenge End Date", value=date(2027, 5, 7))
+target_weight = st.sidebar.number_input("Target Weight Goal (kg)", value=82.0, step=0.1)
 selected_date = st.sidebar.date_input("Select Date", value=date.today())
-page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals"])
+page = st.sidebar.radio("View", ["Daily Log", "Analytics & History", "Finance Tracker", "Portfolio & Goals", "Short-Term Goals", "Reminders Schedule"])
 
 st.sidebar.divider()
 st.sidebar.subheader("⚙️ Manage Checklist")
@@ -238,7 +321,23 @@ for _, row in all_tasks.iterrows():
         delete_task(row['id'])
         st.rerun()
 
+st.sidebar.divider()
+st.sidebar.subheader("🔔 Reminders (ntfy.sh)")
+ntfy_topic = st.sidebar.text_input("ntfy Topic Name", value="my_streamtrack_reminders", help="Install the ntfy app on your phone and subscribe to this topic name.")
+
+if st.sidebar.button("▶️ Start Auto-Reminders", use_container_width=True):
+    reminders.start(ntfy_topic)
+    st.sidebar.success("Started! 🕒")
+
+if st.sidebar.button("✉️ Send Test Notification", use_container_width=True):
+    reminders.topic = ntfy_topic
+    reminders.send_reminder("This is a test reminder from Streamtrack! 🚀", "Test Reminder")
+    st.sidebar.success("Test sent!")
+
+st.sidebar.caption("Note: The app must remain running in your terminal for automated reminders to trigger at scheduled times.")
+
 active_day_num = (selected_date - challenge_start_date).days + 1
+TOTAL_DAYS = (challenge_end_date - challenge_start_date).days
 
 # --- PAGE 1: DAILY LOG ---
 if page == "Daily Log":
@@ -261,7 +360,7 @@ if page == "Daily Log":
     with col1:
         current_w = st.number_input("Current Weight (kg)", value=val_w, step=0.1)
     with col2:
-        st.metric("Goal: 82.0 kg", f"{current_w} kg", delta=f"{82.0 - current_w:.1f} kg")
+        st.metric(f"Goal: {target_weight} kg", f"{current_w} kg", delta=f"{target_weight - current_w:.1f} kg")
 
     st.subheader("Daily Checklist")
     current_task_names = all_tasks['task_name'].tolist()
@@ -293,7 +392,7 @@ elif page == "Analytics & History":
         st.plotly_chart(px.line(hist_df, x="day_num", y="tasks_completed", title="Activity Trend", markers=True),
                         use_container_width=True)
         fig_w = px.line(hist_df, x="day_num", y="weight", title="Weight Journey", markers=True)
-        fig_w.add_hline(y=82.0, line_dash="dash", line_color="green", annotation_text="Target 82kg")
+        fig_w.add_hline(y=target_weight, line_dash="dash", line_color="green", annotation_text=f"Target {target_weight}kg")
         st.plotly_chart(fig_w, use_container_width=True)
 
         st.divider()
@@ -599,3 +698,36 @@ elif page == "Short-Term Goals":
                     st.rerun()
     else:
         st.info("No short-term goals found. Add one above to get started!")
+
+# --- PAGE 6: REMINDERS SCHEDULE ---
+elif page == "Reminders Schedule":
+    st.title("⏰ Reminders Schedule")
+    st.markdown("Manage your daily ntfy.sh notification schedules here.")
+    
+    with st.expander("➕ Add New Reminder", expanded=True):
+        r_time = st.time_input("Reminder Time")
+        r_title = st.text_input("Title", placeholder="e.g. Study Time 📚")
+        r_msg = st.text_area("Message", placeholder="e.g. Time to learn DSA and do job prep! 💻")
+        
+        if st.button("Add Reminder"):
+            if r_title and r_msg:
+                add_schedule(r_time.strftime("%H:%M"), r_msg, r_title)
+                st.success("Reminder added!")
+                st.rerun()
+            else:
+                st.warning("Please provide a title and message.")
+
+    sched_df = get_schedules()
+    if not sched_df.empty:
+        st.subheader("Current Schedules")
+        st.info("💡 Note: After adding or deleting schedules, click **▶️ Start Auto-Reminders** in the sidebar to apply changes!")
+        
+        for _, row in sched_df.iterrows():
+            with st.container(border=True):
+                col1, col2 = st.columns([4, 1])
+                col1.markdown(f"**{row['reminder_time']}** - {row['title']}<br>_{row['message']}_", unsafe_allow_html=True)
+                if col2.button("❌ Delete", key=f"del_sched_{row['id']}"):
+                    delete_schedule(row['id'])
+                    st.rerun()
+    else:
+        st.info("No reminders scheduled.")
