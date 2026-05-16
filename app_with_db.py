@@ -7,6 +7,7 @@ import requests
 import threading
 import time
 import schedule
+import os
 
 # --- CONFIGURATION ---
 
@@ -262,21 +263,23 @@ class ReminderService:
 
     def start(self, topic):
         self.topic = topic
+        
+        schedule.clear()
+        conn = sqlite3.connect('challenge.db')
+        df = pd.read_sql_query("SELECT * FROM schedules", conn)
+        conn.close()
+        for _, row in df.iterrows():
+            try:
+                schedule.every().day.at(row['reminder_time']).do(self.send_reminder, row['message'], row['title'])
+            except Exception:
+                pass
+
         # Only start a new thread if one isn't already running
         if self.thread is None or not self.thread.is_alive():
             self.stop_event.clear()
             self.thread = threading.Thread(target=self._run, daemon=True)
             self.thread.start()
             
-            schedule.clear()
-            conn = sqlite3.connect('challenge.db')
-            df = pd.read_sql_query("SELECT * FROM schedules", conn)
-            conn.close()
-            for _, row in df.iterrows():
-                try:
-                    schedule.every().day.at(row['reminder_time']).do(self.send_reminder, row['message'], row['title'])
-                except Exception:
-                    pass
 
     def _run(self):
         while not self.stop_event.is_set():
@@ -299,6 +302,15 @@ init_db()
 
 # --- SIDEBAR: NAVIGATION & TASK MANAGER ---
 st.sidebar.title("🗓️ Control Center")
+
+# Timezone configuration
+user_tz = st.sidebar.selectbox("🌐 Timezone", ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Australia/Sydney"], index=1)
+try:
+    os.environ['TZ'] = user_tz
+    time.tzset()
+except AttributeError:
+    pass # Windows fallback
+
 challenge_start_date = st.sidebar.date_input("Challenge Start Date", value=date(2026, 5, 7))
 challenge_end_date = st.sidebar.date_input("Challenge End Date", value=date(2027, 5, 7))
 target_weight = st.sidebar.number_input("Target Weight Goal (kg)", value=82.0, step=0.1)
@@ -703,6 +715,7 @@ elif page == "Short-Term Goals":
 elif page == "Reminders Schedule":
     st.title("⏰ Reminders Schedule")
     st.markdown("Manage your daily ntfy.sh notification schedules here.")
+    st.info(f"🕰️ **Current System Time:** {time.strftime('%H:%M')} — *Schedules will trigger based on this time!*")
     
     with st.expander("➕ Add New Reminder", expanded=True):
         r_time = st.time_input("Reminder Time")
